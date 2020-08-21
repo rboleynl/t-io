@@ -193,11 +193,11 @@
 */
 package org.tio.utils.thread.pool;
 
-import java.util.concurrent.ConcurrentLinkedQueue;
 import java.util.concurrent.Executor;
 
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.tio.utils.queue.FullWaitQueue;
 
 /**
  *
@@ -207,14 +207,6 @@ import org.slf4j.LoggerFactory;
 public abstract class AbstractQueueRunnable<T> extends AbstractSynRunnable {
 	private static final Logger log = LoggerFactory.getLogger(AbstractQueueRunnable.class);
 
-	/** The msg queue. */
-	protected ConcurrentLinkedQueue<T> msgQueue = new ConcurrentLinkedQueue<>();
-
-	/**
-	 *
-	 * @param executor
-	 * @author tanyaowu
-	 */
 	public AbstractQueueRunnable(Executor executor) {
 		super(executor);
 	}
@@ -229,26 +221,26 @@ public abstract class AbstractQueueRunnable<T> extends AbstractSynRunnable {
 			return false;
 		}
 
-		return msgQueue.add(t);
+		return getMsgQueue().add(t);
 	}
 
 	/**
 	 * 清空处理的队列消息
 	 */
 	public void clearMsgQueue() {
-		msgQueue.clear();
+		if (getMsgQueue() != null) {
+			getMsgQueue().clear();
+		}
 	}
 
 	@Override
 	public boolean isNeededExecute() {
-		return  !this.isCanceled() && msgQueue.size() > 0;
+		return  (getMsgQueue() != null && !getMsgQueue().isEmpty()) && !this.isCanceled();
 	}
 
 	/**
 	 * 获取消息队列
 	 * @return
 	 */
-	public ConcurrentLinkedQueue<T> getMsgQueue() {
-		return msgQueue;
-	}
+	public abstract FullWaitQueue<T> getMsgQueue();
 }

@@ -196,9 +196,9 @@ package org.tio.core.task;
 import java.nio.ByteBuffer;
 import java.util.ArrayList;
 import java.util.List;
-import java.util.Objects;
 import java.util.concurrent.ConcurrentLinkedQueue;
 import java.util.concurrent.Executor;
+import java.util.concurrent.locks.ReentrantLock;
 
 import javax.net.ssl.SSLException;
 
@@ -206,15 +206,17 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.tio.core.ChannelContext;
 import org.tio.core.ChannelContext.CloseCode;
-import org.tio.core.TioConfig;
 import org.tio.core.TcpConst;
 import org.tio.core.Tio;
+import org.tio.core.TioConfig;
 import org.tio.core.WriteCompletionHandler.WriteCompletionVo;
 import org.tio.core.intf.AioHandler;
 import org.tio.core.intf.Packet;
 import org.tio.core.ssl.SslUtils;
 import org.tio.core.ssl.SslVo;
 import org.tio.core.utils.TioUtils;
+import org.tio.utils.queue.FullWaitQueue;
+import org.tio.utils.queue.TioFullWaitQueue;
 import org.tio.utils.thread.pool.AbstractQueueRunnable;
 
 /**
@@ -225,11 +227,12 @@ import org.tio.utils.thread.pool.AbstractQueueRunnable;
 public class SendRunnable extends AbstractQueueRunnable<Packet> {
 	private static final Logger				log									= LoggerFactory.getLogger(SendRunnable.class);
 	private ChannelContext					channelContext						= null;
-	private TioConfig					tioConfig						= null;
+	private TioConfig						tioConfig							= null;
 	private AioHandler						aioHandler							= null;
 	private boolean							isSsl								= false;
 	/** The msg queue. */
 	private ConcurrentLinkedQueue<Packet>	forSendAfterSslHandshakeCompleted	= null;											//new ConcurrentLinkedQueue<>();
+	public boolean							canSend								= true;
 
 	public ConcurrentLinkedQueue<Packet> getForSendAfterSslHandshakeCompleted(boolean forceCreate) {
 		if (forSendAfterSslHandshakeCompleted == null && forceCreate) {
@@ -258,6 +261,8 @@ public class SendRunnable extends AbstractQueueRunnable<Packet> {
 		this.tioConfig = channelContext.tioConfig;
 		this.aioHandler = tioConfig.getAioHandler();
 		this.isSsl = SslUtils.isSsl(tioConfig);
+
+		getMsgQueue();
 	}
 
 	@Override
@@ -265,15 +270,6 @@ public class SendRunnable extends AbstractQueueRunnable<Packet> {
 		if (this.isCanceled()) {
 			log.info("{}, 任务已经取消，{}添加到发送队列失败", channelContext, packet.logstr());
 			return false;
-		}
-
-		if (tioConfig.packetConverter != null) {
-			Packet packet1 = tioConfig.packetConverter.convert(packet, channelContext);
-			if (packet1 == null) {
-				log.info("convert后为null，表示不需要发送", channelContext, packet.logstr());
-				return true;
-			}
-			packet = packet1;
 		}
 
 		if (channelContext.sslFacadeContext != null && !channelContext.sslFacadeContext.isHandshakeCompleted() && SslUtils.needSslEncrypt(packet, tioConfig)) {
@@ -302,9 +298,7 @@ public class SendRunnable extends AbstractQueueRunnable<Packet> {
 	private ByteBuffer getByteBuffer(Packet packet) {
 		try {
 			ByteBuffer byteBuffer = packet.getPreEncodedByteBuffer();
-			if (byteBuffer != null) {
-				//			byteBuffer = byteBuffer.duplicate();
-			} else {
+			if (byteBuffer == null) {
 				byteBuffer = aioHandler.encode(packet, tioConfig, channelContext);
 			}
 
@@ -324,29 +318,26 @@ public class SendRunnable extends AbstractQueueRunnable<Packet> {
 	 * @param newValue
 	 * @return
 	 */
-	private static boolean swithed(Boolean oldValue, boolean newValue) {
-		if (oldValue == null) {
-			return false;
-		}
+	//	private static boolean changed(Boolean oldValue, boolean newValue) {
+	//		if (oldValue == null) {
+	//			return false;
+	//		}
+	//
+	//		return oldValue != newValue;
+	//	}
 
-		if (Objects.equals(oldValue, newValue)) {
-			return false;
-		}
-
-		return true;
-	}
-
-	private static final int MAX_CAPACITY = TcpConst.MAX_DATA_LENGTH - 1024; //减掉1024是尽量防止溢出的一小部分还分成一个tcp包发出 
+	private static final int	MAX_CAPACITY_MIN	= TcpConst.MAX_DATA_LENGTH - 1024;	//减掉1024是尽量防止溢出的一小部分还分成一个tcp包发出 
+	private static final int	MAX_CAPACITY_MAX	= MAX_CAPACITY_MIN * 10;
 
 	//	private int repeatCount = 0;
 
 	@Override
 	public void runTask() {
-		int queueSize = msgQueue.size();
-		if (queueSize == 0) {
+		if (msgQueue.isEmpty()) {
 			return;
 		}
 
+		int queueSize = msgQueue.size();
 		if (queueSize == 1) {
 			//			System.out.println(1);
 			Packet packet = msgQueue.poll();
@@ -356,7 +347,7 @@ public class SendRunnable extends AbstractQueueRunnable<Packet> {
 			return;
 		}
 
-		int listInitialCapacity = Math.min(queueSize, 200);
+		int listInitialCapacity = Math.min(queueSize, canSend ? 300 : 1000);
 
 		Packet packet = null;
 		List<Packet> packets = new ArrayList<>(listInitialCapacity);
@@ -364,7 +355,7 @@ public class SendRunnable extends AbstractQueueRunnable<Packet> {
 		//		int packetCount = 0;
 		int allBytebufferCapacity = 0;
 		Boolean needSslEncrypted = null;
-		boolean sslSwitched = false;
+		boolean sslChanged = false;
 		while ((packet = msgQueue.poll()) != null) {
 			ByteBuffer byteBuffer = getByteBuffer(packet);
 
@@ -374,24 +365,21 @@ public class SendRunnable extends AbstractQueueRunnable<Packet> {
 			allBytebufferCapacity += byteBuffer.limit();
 
 			if (isSsl) {
-				if (packet.isSslEncrypted()) {
-					boolean _needSslEncrypted = false;
-					sslSwitched = swithed(needSslEncrypted, _needSslEncrypted);
-					needSslEncrypted = _needSslEncrypted;
+				boolean _needSslEncrypted = !packet.isSslEncrypted();
+				if (needSslEncrypted == null) {
+					sslChanged = false;
 				} else {
-					boolean _needSslEncrypted = true;
-					sslSwitched = swithed(needSslEncrypted, _needSslEncrypted);
-					needSslEncrypted = _needSslEncrypted;
+					sslChanged = needSslEncrypted != _needSslEncrypted;
 				}
-			} else { //非ssl，不涉及到加密和不加密的切换
-				needSslEncrypted = false;
+				needSslEncrypted = _needSslEncrypted;
 			}
 
-			if ((allBytebufferCapacity >= MAX_CAPACITY) || sslSwitched) {
+			if ((canSend && allBytebufferCapacity >= MAX_CAPACITY_MIN) || (allBytebufferCapacity >= MAX_CAPACITY_MAX) || sslChanged) {
 				break;
 			}
 		}
 
+		//		System.out.println(packets.size());
 		if (allBytebufferCapacity == 0) {
 			return;
 		}
@@ -402,7 +390,7 @@ public class SendRunnable extends AbstractQueueRunnable<Packet> {
 
 		allByteBuffer.flip();
 
-		if (needSslEncrypted) {
+		if (isSsl && needSslEncrypted) {
 			SslVo sslVo = new SslVo(allByteBuffer, packets);
 			try {
 				channelContext.sslFacadeContext.getSslFacade().encrypt(sslVo);
@@ -428,7 +416,6 @@ public class SendRunnable extends AbstractQueueRunnable<Packet> {
 
 	public boolean sendPacket(Packet packet) {
 		ByteBuffer byteBuffer = getByteBuffer(packet);
-
 		if (isSsl) {
 			if (!packet.isSslEncrypted()) {
 				SslVo sslVo = new SslVo(byteBuffer, packet);
@@ -463,22 +450,22 @@ public class SendRunnable extends AbstractQueueRunnable<Packet> {
 			return;
 		}
 
-		if (!byteBuffer.hasRemaining()) {
-			byteBuffer.flip();
-		}
+		//		if (!byteBuffer.hasRemaining()) {
+		//			byteBuffer.flip();
+		//		}
 
+		ReentrantLock lock = channelContext.writeCompletionHandler.lock;
+		lock.lock();
 		try {
-			channelContext.writeCompletionHandler.getWriteSemaphore().acquire();
+			canSend = false;
+			WriteCompletionVo writeCompletionVo = new WriteCompletionVo(byteBuffer, packets);
+			channelContext.asynchronousSocketChannel.write(byteBuffer, writeCompletionVo, channelContext.writeCompletionHandler);
+			channelContext.writeCompletionHandler.condition.await();
 		} catch (InterruptedException e) {
 			log.error(e.toString(), e);
+		} finally {
+			lock.unlock();
 		}
-
-		write(byteBuffer, packets);
-	}
-
-	private void write(ByteBuffer byteBuffer, Object packets) {
-		WriteCompletionVo writeCompletionVo = new WriteCompletionVo(byteBuffer, packets);
-		channelContext.asynchronousSocketChannel.write(byteBuffer, writeCompletionVo, channelContext.writeCompletionHandler);
 	}
 
 	@Override
@@ -493,6 +480,21 @@ public class SendRunnable extends AbstractQueueRunnable<Packet> {
 	@Override
 	public String logstr() {
 		return toString();
+	}
+
+	/** The msg queue. */
+	private FullWaitQueue<Packet> msgQueue = null;
+
+	@Override
+	public FullWaitQueue<Packet> getMsgQueue() {
+		if (msgQueue == null) {
+			synchronized (this) {
+				if (msgQueue == null) {
+					msgQueue = new TioFullWaitQueue<Packet>(Integer.getInteger("tio.fullqueue.capacity", null), false);
+				}
+			}
+		}
+		return msgQueue;
 	}
 
 }

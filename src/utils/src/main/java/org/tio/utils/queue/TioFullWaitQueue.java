@@ -191,47 +191,55 @@
 	   See the License for the specific language governing permissions and
 	   limitations under the License.
 */
-package org.tio.utils.qr.scheme;
+package org.tio.utils.queue;
 
-import static org.tio.utils.qr.scheme.SchemeUtil.LINE_FEED;
-
-import java.util.Map;
+import java.util.concurrent.ConcurrentLinkedQueue;
 
 /**
- *
+ * 暂时用ConcurrentLinkedQueue代替
+ * @author tanyaowu 
+ * 2019年9月30日 上午9:22:00
  */
-public class IJournal extends SubSchema {
+public class TioFullWaitQueue<T> implements FullWaitQueue<T> {
 
-	public static final String	NAME		= "VJOURNAL";
-	private static final String	BEGIN_TODO	= "BEGIN:VJOURNAL";
+	private ConcurrentLinkedQueue<T> queue = new ConcurrentLinkedQueue<>();
 
-	public IJournal() {
-		super();
+	/**
+	 * 
+	 * @param capacity
+	 * @param useSingleProducer
+	 * @author tanyaowu
+	 */
+	public TioFullWaitQueue(Integer capacity, boolean useSingleProducer) {
 	}
 
 	@Override
-	public SubSchema parseSchema(Map<String, String> parameters, String code) {
-		// TODO Auto-generated method stub
-		return null;
+	public boolean add(T e) {
+		return queue.add(e);
 	}
 
 	@Override
-	public String generateString() {
-		StringBuilder sb = new StringBuilder();
-		sb.append(BEGIN_TODO).append(LINE_FEED);
-		// TODO
-		sb.append(LINE_FEED).append("END:VJOURNAL");
-		return sb.toString();
+	public T poll() {
+		return queue.poll();
 	}
 
 	@Override
-	public String toString() {
-		return generateString();
+	public int size() {
+		return queue.size();
 	}
 
-	public static SubSchema parse(Map<String, String> parameters, String code) {
-		// TODO Auto-generated method stub
-		return null;
+	@Override
+	public void clear() {
+		queue.clear();
+	}
+
+	/** 
+	 * @return
+	 * @author tanyaowu
+	 */
+	@Override
+	public boolean isEmpty() {
+		return queue.isEmpty();
 	}
 
 }

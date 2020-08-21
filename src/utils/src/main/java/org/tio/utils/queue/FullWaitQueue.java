@@ -191,88 +191,35 @@
 	   See the License for the specific language governing permissions and
 	   limitations under the License.
 */
-package org.tio.utils.qr.scheme;
-
-import static org.tio.utils.qr.scheme.SchemeUtil.getParameters;
-
-import java.util.Map;
+package org.tio.utils.queue;
 
 /**
- * Bookmark encoding
+ * 满员等待队列
+ * @author tanyaowu 
+ * 2019年9月28日 上午9:36:45
  */
-public class Bookmark extends Schema {
-
-	private static final String	BEGIN_BOOKMARK	= "MEBKM";
-	private static final String	URL				= "URL";
-	private static final String	TITLE			= "TITLE";
-	private static final String	LINE_SEPARATOR	= ";";
-	private String				url;
-	private String				titel;
-
-	public Bookmark() {
-		super();
-	}
-
-	public String getUrl() {
-		return url;
-	}
-
-	public void setUrl(String url) {
-		this.url = url;
-	}
-
-	public String getTitel() {
-		return titel;
-	}
-
-	public void setTitel(String titel) {
-		this.titel = titel;
-	}
-
-	@Override
-	public Schema parseSchema(String code) {
-		if (code == null || !code.startsWith(BEGIN_BOOKMARK)) {
-			throw new IllegalArgumentException("this is not a valid Bookmark code: " + code);
-		}
-		Map<String, String> parameters = getParameters(code.replaceFirst(BEGIN_BOOKMARK + ":", ""), LINE_SEPARATOR, ":");
-		if (parameters.containsKey(URL)) {
-			setUrl(parameters.get(URL));
-		}
-		if (parameters.containsKey(TITLE)) {
-			setTitel(parameters.get(TITLE));
-		}
-		return this;
-	}
-
-	@Override
-	public String generateString() {
-		StringBuilder sb = new StringBuilder();
-		sb.append(BEGIN_BOOKMARK).append(":");
-		if (url != null) {
-			sb.append(URL).append(":").append(url).append(LINE_SEPARATOR);
-		}
-		if (titel != null) {
-			sb.append(TITLE).append(":").append(titel).append(LINE_SEPARATOR);
-		}
-		sb.append(LINE_SEPARATOR);
-		return sb.toString();
-	}
+public interface FullWaitQueue<T> {
+	/**
+	 * write
+	 *  向队列尾添加一个元素，如果队列已经满了，则等待一段时间
+	 * @param t
+	 * @return
+	 * @author tanyaowu
+	 */
+	public boolean add(T t);
 
 	/**
-	 * Returns the textual representation of this bookmark of the form
-	 * <p>
-	 * MEBKM:URL:google.com;TITLE:Google;
-	 * </p>
+	 * read
+	 * Retrieves and removes the head of this queue,
+	 * or returns {@code null} if this queue is empty.
+	 *
+	 * @return the head of this queue, or {@code null} if this queue is empty
 	 */
-	@Override
-	public String toString() {
-		return generateString();
-	}
+	public T poll();
 
-	public static Bookmark parse(final String code) {
-		Bookmark bookmark = new Bookmark();
-		bookmark.parseSchema(code);
-		return bookmark;
-	}
+	public void clear();
 
+	public int size();
+	
+	public boolean isEmpty();
 }

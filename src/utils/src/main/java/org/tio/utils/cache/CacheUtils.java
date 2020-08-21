@@ -194,10 +194,6 @@
 package org.tio.utils.cache;
 
 import java.io.Serializable;
-import java.util.concurrent.TimeUnit;
-import java.util.concurrent.locks.ReentrantReadWriteLock;
-import java.util.concurrent.locks.ReentrantReadWriteLock.ReadLock;
-import java.util.concurrent.locks.ReentrantReadWriteLock.WriteLock;
 
 import org.redisson.api.RedissonClient;
 import org.slf4j.Logger;
@@ -219,10 +215,6 @@ public abstract class CacheUtils {
 
 	private CacheUtils() {
 	}
-
-
-
-
 
 	/**
 	 * 根据cacheKey从缓存中获取对象，如果缓存中没有该key对象，则用firsthandCreater获取对象，并将对象用cacheKey存于cache中
@@ -270,14 +262,14 @@ public abstract class CacheUtils {
 	@SuppressWarnings("unchecked")
 	private static <T extends Serializable> T getFromCacheOnly(ICache cache, String cacheKey) {
 		return (T) cache.get(cacheKey);
-//		Serializable ret = cache.get(cacheKey);
-//		if (ret != null) {
-//			if (ret instanceof NullClass) {
-//				return null;
-//			}
-//			return (T) ret;
-//		}
-//		return null;
+		//		Serializable ret = cache.get(cacheKey);
+		//		if (ret != null) {
+		//			if (ret instanceof NullClass) {
+		//				return null;
+		//			}
+		//			return (T) ret;
+		//		}
+		//		return null;
 	}
 
 	/**
@@ -311,55 +303,37 @@ public abstract class CacheUtils {
 		}
 
 		String lockKey = cache.getCacheName() + cacheKey;
-		ReentrantReadWriteLock rwLock = LockUtils.getReentrantReadWriteLock(lockKey, cache);
-		WriteLock writeLock = rwLock.writeLock();
-		boolean tryWrite = writeLock.tryLock();
-		if (tryWrite) {
-			try {
-				ret = getFromCacheOnly(cache, cacheKey);
-				if (ret != null) {
-					return (T) ret;
-				}
+		try {
+			LockUtils.runWriteOrWaitRead(lockKey, cache, () -> {
+//				@Override
+//				public void read() throws Exception {
+//				}
 
-				try {
-					ret = firsthandCreater.create();
-				} catch (Exception e) {
-					throw new RuntimeException(e);
-				}
-				if (ret == null) {
-					if (putTempToCacheIfNull) {
-						cache.putTemporary(cacheKey, org.tio.utils.cache.ICache.NULL_OBJ);
+//				@Override
+//				public void write() throws Exception {
+					Serializable ret1 = getFromCacheOnly(cache, cacheKey);
+					if (ret1 != null) {
+						return;
 					}
-				} else {
-					cache.put(cacheKey, ret);
-				}
-			} finally {
-				writeLock.unlock();
-			}
-		} else {
-			ReadLock readLock = rwLock.readLock();
-			boolean tryRead = false;
-			try {
-				if (readTimeoutWithSeconds == null || readTimeoutWithSeconds <= 0) {
-					readTimeoutWithSeconds = 60L;
-				}
-				tryRead = readLock.tryLock(readTimeoutWithSeconds, TimeUnit.SECONDS);
-			} catch (InterruptedException e) {
-				log.error(e.toString(), e);
-			}
-			if (tryRead) {
-				try {
-					ret = getFromCacheOnly(cache, cacheKey);
-					if (ret != null) {
-						return (T) ret;
+
+					try {
+						ret1 = firsthandCreater.create();
+					} catch (Exception e) {
+						throw new RuntimeException(e);
 					}
-				} finally {
-					readLock.unlock();
-				}
-			} else {
-				return null;
-			}
+					if (ret1 == null) {
+						if (putTempToCacheIfNull) {
+							cache.putTemporary(cacheKey, org.tio.utils.cache.ICache.NULL_OBJ);
+						}
+					} else {
+						cache.put(cacheKey, ret1);
+					}
+//				}
+			}, readTimeoutWithSeconds);
+		} catch (Exception e1) {
+			log.error(e1.toString(), e1);
 		}
+		ret = getFromCacheOnly(cache, cacheKey);
 		return (T) ret;
 	}
 

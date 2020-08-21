@@ -191,171 +191,113 @@
 	   See the License for the specific language governing permissions and
 	   limitations under the License.
 */
-package org.tio.utils.qr;
+package org.tio.http.common;
 
-import java.io.File;
-import java.io.IOException;
-import java.io.OutputStream;
+import java.util.HashMap;
+import java.util.Map;
 
-import org.tio.utils.qr.exception.QRGenerationException;
-import org.tio.utils.qr.image.ImageType;
-import org.tio.utils.qr.scheme.Schema;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+import org.tio.utils.HashUtils;
+import org.tio.utils.hutool.StrUtil;
+import org.tio.utils.lock.LockUtils;
 
-import com.google.zxing.EncodeHintType;
-import com.google.zxing.WriterException;
-import com.google.zxing.client.j2se.MatrixToImageConfig;
-import com.google.zxing.client.j2se.MatrixToImageWriter;
-import com.google.zxing.qrcode.QRCodeWriter;
-import com.google.zxing.qrcode.decoder.ErrorCorrectionLevel;
-
-public class QRCode extends AbstractQRCode {
-
-	public static final MatrixToImageConfig DEFAULT_CONFIG = new MatrixToImageConfig();
-
-	protected final String			text;
-	protected MatrixToImageConfig	matrixToImageConfig	= DEFAULT_CONFIG;
-
-	protected QRCode(String text) {
-		this.text = text;
-		qrWriter = new QRCodeWriter();
-	}
+/**
+ * 本类主要用于可枚举的String，不要滥用
+ * @author tanyaowu
+ */
+public class StrCache {
+	private static Logger						log					= LoggerFactory.getLogger(StrCache.class);
+	private static final int					MAX_SIZE			= 5000;
+	/**
+	 * key: byte[]对应的hashcode
+	 * value: byte[]对应的字符串
+	 */
+	private static final Map<Integer, String>	BYTES_STRING_MAP	= new HashMap<>(100);
+	/**
+	 * key : 原字符串
+	 * value: 小写后的字符串
+	 */
+	private static final Map<Integer, String>	INIT_LOWERCASE_MAP	= new HashMap<>(100);
 
 	/**
-	 * Create a QR code from the given text.    <br><br>
-	 * <p>
-	 * There is a size limitation to how much you can put into a QR code. This has been tested to work with up to a length of
-	 * 2950
-	 * characters.<br><br>
-	 * </p>
-	 * <p>
-	 * The QRCode will have the following defaults:     <br> {size: 100x100}<br>{imageType:PNG}  <br><br>
-	 * </p>
-	 * Both size and imageType can be overridden:   <br> Image type override is done by calling {@link
-	 * QRCode#to(ImageType)} e.g. QRCode.from("hello world").to(JPG) <br> Size override is done
-	 * by calling
-	 * {@link QRCode#withSize} e.g. QRCode.from("hello world").to(JPG).withSize(125, 125)  <br>
-	 *
-	 * @param text the text to encode to a new QRCode, this may fail if the text is too large. <br>
-	 * @return the QRCode object    <br>
+	 * 
 	 */
-	public static QRCode from(String text) {
-		return new QRCode(text);
+	public StrCache() {
+
 	}
+
+	//	public static String get(byte[] allbs, int start, int len) {
+	//		byte[] bs = new byte[len];
+	//		System.arraycopy(allbs, start, bs, 0, len);
+	//
+	//		return get(bs);
+	//	}
 
 	/**
-	 * Creates a a QR Code from the given {@link Schema}.
-	 * <p>
-	 * The QRCode will have the following defaults:     <br> {size: 100x100}<br>{imageType:PNG}  <br><br>
-	 * </p>
-	 * @param schema the schema to encode as QRCode
-	 * @return the QRCode object
+	 * 
+	 * @param allbs
+	 * @param start
+	 * @param len
+	 * @return
 	 */
-	public static QRCode from(Schema schema) {
-		return new QRCode(schema.generateString());
-	}
+	public static String get(byte[] allbs, int start, int len) {
+		int hashcode = HashUtils.hash31(allbs, start, len);
+		String str = BYTES_STRING_MAP.get(hashcode);
+		if (str == null) {
+			if (BYTES_STRING_MAP.size() > MAX_SIZE) {
+				return new String(allbs, start, len);
+			}
 
-	/**
-	 * Overrides the imageType from its default {@link org.tio.utils.qr.image.ImageType#PNG}
-	 *
-	 * @param imageType the {@link org.tio.utils.qr.image.ImageType} you would like the resulting QR to be
-	 * @return the current QRCode object
-	 */
-	public QRCode to(ImageType imageType) {
-		this.imageType = imageType;
-		return this;
-	}
+			try {
+				LockUtils.runWriteOrWaitRead("StrCache:getBytes" + hashcode, BYTES_STRING_MAP, () -> {
+					String str2 = BYTES_STRING_MAP.get(hashcode);
+					if (str2 == null) {
+						str2 = new String(allbs, start, len);
+						BYTES_STRING_MAP.put(hashcode, str2);
+					}
+				});
+			} catch (Exception e) {
+				log.error(e.toString(), e);
+			}
 
-	/**
-	 * Overrides the size of the qr from its default 125x125
-	 *
-	 * @param width  the width in pixels
-	 * @param height the height in pixels
-	 * @return the current QRCode object
-	 */
-	public QRCode withSize(int width, int height) {
-		this.width = width;
-		this.height = height;
-		return this;
-	}
-
-	/**
-	 * Overrides the default charset by supplying a {@link com.google.zxing.EncodeHintType#CHARACTER_SET} hint to {@link
-	 * com.google.zxing.qrcode.QRCodeWriter#encode}
-	 *
-	 * @param charset the charset as string, e.g. UTF-8
-	 * @return the current QRCode object
-	 */
-	public QRCode withCharset(String charset) {
-		return withHint(EncodeHintType.CHARACTER_SET, charset);
-	}
-
-	/**
-	 * Overrides the default error correction by supplying a {@link com.google.zxing.EncodeHintType#ERROR_CORRECTION} hint to
-	 * {@link com.google.zxing.qrcode.QRCodeWriter#encode}
-	 *
-	 * @param level the error correction level to use by {@link com.google.zxing.qrcode.QRCodeWriter#encode}
-	 * @return the current QRCode object
-	 */
-	public QRCode withErrorCorrection(ErrorCorrectionLevel level) {
-		return withHint(EncodeHintType.ERROR_CORRECTION, level);
-	}
-
-	/**
-	 * Sets hint to {@link com.google.zxing.qrcode.QRCodeWriter#encode}
-	 *
-	 * @param hintType the hintType to set
-	 * @param value the concrete value to set
-	 * @return the current QRCode object
-	 */
-	public QRCode withHint(EncodeHintType hintType, Object value) {
-		hints.put(hintType, value);
-		return this;
-	}
-
-	@Override
-	public File file() {
-		File file;
-		try {
-			file = createTempFile();
-			MatrixToImageWriter.writeToPath(createMatrix(text), imageType.toString(), file.toPath(), matrixToImageConfig);
-		} catch (Exception e) {
-			throw new QRGenerationException("Failed to create QR image from text due to underlying exception", e);
+			str = BYTES_STRING_MAP.get(hashcode);
 		}
-
-		return file;
+		return str;
 	}
 
-	@Override
-	public File file(String name) {
-		File file;
-		try {
-			file = createTempFile(name);
-			MatrixToImageWriter.writeToPath(createMatrix(text), imageType.toString(), file.toPath(), matrixToImageConfig);
-		} catch (Exception e) {
-			throw new QRGenerationException("Failed to create QR image from text due to underlying exception", e);
+	/**
+	 * 
+	 * @param initStr
+	 * @return
+	 */
+	public static String getLowercase(String initStr) {
+		if (StrUtil.isBlank(initStr)) {
+			return initStr;
 		}
+		int hashcode = initStr.hashCode();
+		String str = INIT_LOWERCASE_MAP.get(hashcode);
+		if (str == null) {
+			if (INIT_LOWERCASE_MAP.size() > MAX_SIZE) {
+				return initStr.toLowerCase();
+			}
 
-		return file;
+			try {
+				LockUtils.runWriteOrWaitRead("StrCache:getLowercase" + hashcode, INIT_LOWERCASE_MAP, () -> {
+					String str2 = INIT_LOWERCASE_MAP.get(hashcode);
+					if (str2 == null) {
+						str2 = initStr.toLowerCase();
+						INIT_LOWERCASE_MAP.put(hashcode, str2);
+					}
+				});
+			} catch (Exception e) {
+				log.error(e.toString(), e);
+			}
+
+			str = INIT_LOWERCASE_MAP.get(hashcode);
+		}
+		return str;
+
 	}
 
-	@Override
-	protected void writeToStream(OutputStream stream) throws IOException, WriterException {
-		MatrixToImageWriter.writeToStream(createMatrix(text), imageType.toString(), stream, matrixToImageConfig);
-	}
-
-	@SuppressWarnings("unused")
-	private File createTempSvgFile() throws IOException {
-		return createTempSvgFile("QRCode");
-	}
-
-	private File createTempSvgFile(String name) throws IOException {
-		File file = File.createTempFile(name, ".svg");
-		file.deleteOnExit();
-		return file;
-	}
-
-	public QRCode withColor(int onColor, int offColor) {
-		matrixToImageConfig = new MatrixToImageConfig(onColor, offColor);
-		return this;
-	}
 }

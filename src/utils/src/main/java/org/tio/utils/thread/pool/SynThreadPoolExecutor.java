@@ -195,11 +195,10 @@ package org.tio.utils.thread.pool;
 
 import java.util.concurrent.BlockingQueue;
 import java.util.concurrent.Future;
+import java.util.concurrent.RejectedExecutionHandler;
 import java.util.concurrent.ThreadFactory;
 import java.util.concurrent.ThreadPoolExecutor;
 import java.util.concurrent.TimeUnit;
-import java.util.concurrent.locks.Lock;
-import java.util.concurrent.locks.ReadWriteLock;
 
 /**
  *
@@ -225,6 +224,21 @@ public class SynThreadPoolExecutor extends ThreadPoolExecutor {
 		super(corePoolSize, maximumPoolSize, keepAliveTime, TimeUnit.SECONDS, runnableQueue, threadFactory);
 		this.name = name;
 	}
+	
+	/**
+	 * 
+	 * @param corePoolSize
+	 * @param maximumPoolSize
+	 * @param keepAliveTime
+	 * @param runnableQueue
+	 * @param threadFactory
+	 * @param name
+	 * @param rejectedExecutionHandler
+	 */
+	public SynThreadPoolExecutor(int corePoolSize, int maximumPoolSize, long keepAliveTime, BlockingQueue<Runnable> runnableQueue, ThreadFactory threadFactory, String name, RejectedExecutionHandler rejectedExecutionHandler) {
+		super(corePoolSize, maximumPoolSize, keepAliveTime, TimeUnit.SECONDS, runnableQueue, threadFactory, rejectedExecutionHandler);
+		this.name = name;
+	}
 
 	/**
 	 *
@@ -235,50 +249,55 @@ public class SynThreadPoolExecutor extends ThreadPoolExecutor {
 	private boolean checkBeforeExecute(Runnable runnable) {
 		if (runnable instanceof AbstractSynRunnable) {
 			AbstractSynRunnable synRunnable = (AbstractSynRunnable) runnable;
-
-			if (synRunnable.isExecuted()) {
-				//				synRunnable.avoidRepeatExecuteCount.incrementAndGet();
+			if (synRunnable.executed) {
 				return false;
 			}
 
-			ReadWriteLock runningLock = synRunnable.runningLock();
-			Lock writeLock = runningLock.writeLock();
-			boolean tryLock = writeLock.tryLock();
-			try {
-				//				tryLock = writeLock.tryLock();
-				if (tryLock) {
-					if (synRunnable.isExecuted()) {
-						//						synRunnable.avoidRepeatExecuteCount.incrementAndGet();
+			boolean tryLock = synRunnable.runningLock.tryLock();
+			if (tryLock) {
+				try {
+					if (synRunnable.executed) {
 						return false;
 					}
-					synRunnable.executeCount.incrementAndGet();
-					//					System.out.println(synRunnable.logstr() + ", 提交成功次数" + synRunnable.executeCount);
-					synRunnable.setExecuted(true);
-
-				} else {
-					//					synRunnable.avoidRepeatExecuteCount.incrementAndGet();
+					synRunnable.executed = true;
+					return true;
+				} finally {
+					synRunnable.runningLock.unlock();
 				}
-				return tryLock;
-			} finally {
-				if (tryLock) {
-					writeLock.unlock();
-				}
+			} else {
+				return false;
 			}
 		} else {
 			return true;
 		}
-
 	}
 
 	@Override
 	public void execute(Runnable runnable) {
-		if (checkBeforeExecute(runnable)) {
-			execute1(runnable);
-		}
-	}
+		if (runnable instanceof AbstractSynRunnable) {
+			AbstractSynRunnable synRunnable = (AbstractSynRunnable) runnable;
+			if (synRunnable.executed) {
+				return;
+			}
 
-	private void execute1(Runnable runnable) {
-		super.execute(runnable);
+			boolean tryLock = synRunnable.runningLock.tryLock();
+			if (tryLock) {
+				try {
+					if (synRunnable.executed) {
+						return;
+					}
+					synRunnable.executed = true;
+					super.execute(runnable);
+				} finally {
+					synRunnable.runningLock.unlock();
+				}
+			} else {
+				return;
+			}
+		} else {
+			super.execute(runnable);
+		}
+
 	}
 
 	/**

@@ -257,7 +257,6 @@ import org.tio.utils.hutool.FileUtil;
 import org.tio.utils.hutool.StrUtil;
 import org.tio.utils.hutool.Validator;
 import org.tio.utils.lock.LockUtils;
-import org.tio.utils.lock.ReadWriteLockHandler;
 
 import com.esotericsoftware.reflectasm.MethodAccess;
 
@@ -312,18 +311,19 @@ public class DefaultHttpRequestHandler implements HttpRequestHandler {
 	private static MethodAccess getMethodAccess(Class<?> clazz) throws Exception {
 		MethodAccess ret = CLASS_METHODACCESS_MAP.get(clazz);
 		if (ret == null) {
-			LockUtils.runReadOrWrite("_tio_http_h_ma_" + clazz.getName(), clazz, new ReadWriteLockHandler() {
-				@Override
-				public Object read() {
-					return null;
-				}
+			LockUtils.runWriteOrWaitRead("_tio_http_h_ma_" + clazz.getName(), clazz, () -> {
+			    //				@Override
+			    //				public void read() {
+			    //				}
 
-				@Override
-				public Object write() {
-					MethodAccess ret = MethodAccess.get(clazz);
-					CLASS_METHODACCESS_MAP.put(clazz, ret);
-					return ret;
+			    //				@Override
+			    //				public void write() {
+			    //					MethodAccess ret = CLASS_METHODACCESS_MAP.get(clazz);
+			    if (CLASS_METHODACCESS_MAP.get(clazz) == null) {
+					//						ret = MethodAccess.get(clazz);
+					CLASS_METHODACCESS_MAP.put(clazz, MethodAccess.get(clazz));
 				}
+				//				}
 			});
 			ret = CLASS_METHODACCESS_MAP.get(clazz);
 		}
@@ -458,7 +458,7 @@ public class DefaultHttpRequestHandler implements HttpRequestHandler {
 	 * @return
 	 * @author tanyaowu
 	 */
-	private HttpSession createSession(HttpRequest request) {
+	public HttpSession createSession(HttpRequest request) {
 		String sessionId = httpConfig.getSessionIdGenerator().sessionId(httpConfig, request);
 		HttpSession httpSession = new HttpSession(sessionId);
 		if (httpSessionListener != null) {
@@ -822,7 +822,7 @@ public class DefaultHttpRequestHandler implements HttpRequestHandler {
 													String retStr = FreemarkerUtils.generateStringByPath(template, configuration, model);
 													response = Resps.bytes(request, retStr.getBytes(configuration.getDefaultEncoding()), extension);
 													return response;
-												} catch (Exception e) {
+												} catch (Throwable e) {
 													log.error("freemarker错误，当成普通文本处理：" + file.getCanonicalPath() + ", " + e.toString());
 												}
 											}
@@ -1087,6 +1087,19 @@ public class DefaultHttpRequestHandler implements HttpRequestHandler {
 
 	}
 
+	public static String getDomain(HttpRequest request) {
+		String domain = request.getDomain();
+
+		boolean isip = Validator.isIpv4(domain);
+		if (!isip) {
+			String[] dms = StrUtil.split(domain, ".");
+			if (dms.length > 2) {
+				domain = "." + dms[dms.length - 2] + "." + dms[dms.length - 1];
+			}
+		}
+		return domain;
+	}
+
 	private void processCookieAfterHandler(HttpRequest request, RequestLine requestLine, HttpResponse httpResponse) throws ExecutionException {
 		if (httpResponse == null) {
 			return;
@@ -1101,13 +1114,13 @@ public class DefaultHttpRequestHandler implements HttpRequestHandler {
 		String sessionId = getSessionId(request);
 
 		if (StrUtil.isBlank(sessionId)) {
-			createSessionCookie(request, httpSession, httpResponse);
+			createSessionCookie(request, httpSession, httpResponse, false);
 			//			log.info("{} 创建会话Cookie, {}", request.getChannelContext(), cookie);
 		} else {
 			HttpSession httpSession1 = (HttpSession) httpConfig.getSessionStore().get(sessionId);
 
 			if (httpSession1 == null) {//有cookie但是超时了
-				createSessionCookie(request, httpSession, httpResponse);
+				createSessionCookie(request, httpSession, httpResponse, false);
 			}
 		}
 	}
@@ -1118,46 +1131,58 @@ public class DefaultHttpRequestHandler implements HttpRequestHandler {
 	 * @param request
 	 * @param httpSession
 	 * @param httpResponse
+	 * @param forceCreate
 	 * @return
 	 * @author tanyaowu
 	 */
-	private void createSessionCookie(HttpRequest request, HttpSession httpSession, HttpResponse httpResponse) {
+	private void createSessionCookie(HttpRequest request, HttpSession httpSession, HttpResponse httpResponse, boolean forceCreate) {
 		if (httpResponse == null) {
 			return;
 		}
 
-		Object test = request.channelContext.getAttribute(SESSION_COOKIE_KEY);
-		if (test != null) {
-			return;
-		}
-
-		String sessionId = httpSession.getId();
-		//		String host = request.getHost();
-		String domain = request.getDomain();
-
-		boolean isip = Validator.isIpv4(domain);
-		if (!isip) {
-			String[] dms = StrUtil.split(domain, ".");
-			if (dms.length > 2) {
-				domain = "." + dms[dms.length - 2] + "." + dms[dms.length - 1];
+		if (!forceCreate) {
+			Object test = request.channelContext.getAttribute(SESSION_COOKIE_KEY);
+			if (test != null) {
+				return;
 			}
 		}
 
+		String sessionId = httpSession.getId();
+		String domain = getDomain(request);
 		String name = httpConfig.getSessionCookieName();
 		long maxAge = 3600 * 24 * 365 * 10;//Math.max(httpConfig.getSessionTimeout() * 30, 3600 * 24 * 365 * 10);
-		//				maxAge = Long.MAX_VALUE; //把过期时间掌握在服务器端
 
 		Cookie sessionCookie = new Cookie(domain, name, sessionId, maxAge);
-
 		if (sessionCookieDecorator != null) {
 			sessionCookieDecorator.decorate(sessionCookie, request, request.getDomain());
 		}
 		httpResponse.addCookie(sessionCookie);
 
 		httpConfig.getSessionStore().put(sessionId, httpSession);
-
 		request.channelContext.setAttribute(SESSION_COOKIE_KEY, sessionCookie);
 		return;
+	}
+
+	/**
+	 * 更新sessionId
+	 * @param request
+	 * @param httpSession
+	 * @param httpResponse
+	 * @return
+	 * @author tanyaowu
+	 */
+	public HttpSession updateSessionId(HttpRequest request, HttpSession httpSession, HttpResponse httpResponse) {
+		String oldId = httpSession.getId();
+		String newId = httpConfig.getSessionIdGenerator().sessionId(httpConfig, request);
+		httpSession.setId(newId);
+		
+		if (httpSessionListener != null) {
+			httpSessionListener.doAfterCreated(request, httpSession, httpConfig);
+		}
+		httpConfig.getSessionStore().remove(oldId);
+		createSessionCookie(request, httpSession, httpResponse, true);
+		httpSession.update(httpConfig); //HttpSession有变动时，都要调一下update()
+		return httpSession;
 	}
 
 	private void processCookieBeforeHandler(HttpRequest request, RequestLine requestLine) throws ExecutionException {

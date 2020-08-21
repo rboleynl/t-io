@@ -203,6 +203,8 @@ import org.tio.client.ReconnConf;
 import org.tio.core.ChannelContext;
 import org.tio.core.maintain.MaintainUtils;
 import org.tio.utils.SystemTimer;
+import org.tio.utils.queue.FullWaitQueue;
+import org.tio.utils.queue.TioFullWaitQueue;
 import org.tio.utils.thread.pool.AbstractQueueRunnable;
 
 /**
@@ -216,13 +218,13 @@ public class CloseRunnable extends AbstractQueueRunnable<ChannelContext> {
 
 	public CloseRunnable(Executor executor) {
 		super(executor);
+		getMsgQueue();
 	}
 	//	long count = 1;
 
 	@Override
 	public void runTask() {
-		int queueSize = msgQueue.size();
-		if (queueSize == 0) {
+		if (msgQueue.isEmpty()) {
 			return;
 		}
 		ChannelContext channelContext = null;
@@ -274,7 +276,7 @@ public class CloseRunnable extends AbstractQueueRunnable<ChannelContext> {
 					channelContext.decodeRunnable.setCanceled(true);
 					channelContext.handlerRunnable.setCanceled(true);
 					channelContext.sendRunnable.setCanceled(true);
-					
+
 					channelContext.decodeRunnable.clearMsgQueue();
 					channelContext.handlerRunnable.clearMsgQueue();
 					channelContext.sendRunnable.clearMsgQueue();
@@ -321,5 +323,20 @@ public class CloseRunnable extends AbstractQueueRunnable<ChannelContext> {
 	@Override
 	public String logstr() {
 		return super.logstr();
+	}
+
+	/** The msg queue. */
+	private volatile FullWaitQueue<ChannelContext> msgQueue = null;
+
+	@Override
+	public FullWaitQueue<ChannelContext> getMsgQueue() {
+		if (msgQueue == null) {
+			synchronized (this) {
+				if (msgQueue == null) {
+					msgQueue = new TioFullWaitQueue<ChannelContext>(Integer.getInteger("tio.fullqueue.capacity", null), false);
+				}
+			}
+		}
+		return msgQueue;
 	}
 }

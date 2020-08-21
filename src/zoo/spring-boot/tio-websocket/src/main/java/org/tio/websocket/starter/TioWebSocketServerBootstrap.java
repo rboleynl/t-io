@@ -222,6 +222,8 @@ public final class TioWebSocketServerBootstrap {
 
     private static final String GROUP_CONTEXT_NAME = "tio-websocket-spring-boot-starter";
 
+    private boolean initialized = false;
+
     private TioWebSocketServerProperties serverProperties;
     private TioWebSocketServerClusterProperties clusterProperties;
     private TioWebSocketServerSslProperties serverSslProperties;
@@ -249,9 +251,6 @@ public final class TioWebSocketServerBootstrap {
         this.serverSslProperties = serverSslProperties;
 
         logger.debug(serverSslProperties.toString());
-        if (redissonTioClusterTopic == null) {
-            logger.info("cluster mod closed");
-        }
         this.redissonTioClusterTopic = redissonTioClusterTopic;
 
         // IWsMsgHandler bean not found
@@ -314,13 +313,18 @@ public final class TioWebSocketServerBootstrap {
     }
 
     public void contextInitialized() {
-        logger.info("initialize tio websocket server");
+        if (initialized){
+            logger.info("Tio WebSocket Server has been initialized");
+            return;
+        }
+        logger.info("Initializing Tio WebSocket Server");
         try {
             initTioWebSocketConfig();
             initTioWebSocketServer();
             initTioWebSocketServerTioConfig();
 
             start();
+            initialized = true;
         }
         catch (Throwable e) {
             logger.error("Cannot bootstrap tio websocket server :", e);

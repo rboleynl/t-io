@@ -191,46 +191,26 @@
 	   See the License for the specific language governing permissions and
 	   limitations under the License.
 */
-package org.tio.utils.qr.scheme;
+package org.tio.utils.thread.pool;
 
-import static org.tio.utils.qr.scheme.SchemeUtil.LINE_FEED;
+import java.util.concurrent.ThreadPoolExecutor;
+import java.util.concurrent.ThreadPoolExecutor.CallerRunsPolicy;
 
-import java.util.Map;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 
 /**
- *
+ * @author tanyaowu
  */
-public class IToDo extends SubSchema {
+public class TioCallerRunsPolicy extends CallerRunsPolicy {
+	private static Logger log = LoggerFactory.getLogger(TioCallerRunsPolicy.class);
 
-	public static final String	NAME		= "VTODO";
-	private static final String	BEGIN_TODO	= "BEGIN:VTODO";
-
-	public IToDo() {
-		super();
+	public TioCallerRunsPolicy() {
 	}
 
-	@Override
-	public SubSchema parseSchema(Map<String, String> parameters, String code) {
-		// TODO Auto-generated method stub
-		return null;
+	public void rejectedExecution(Runnable r, ThreadPoolExecutor e) {
+		log.error(r.getClass().getSimpleName());
+		super.rejectedExecution(r, e);
 	}
 
-	@Override
-	public String generateString() {
-		StringBuilder sb = new StringBuilder();
-		sb.append(BEGIN_TODO).append(LINE_FEED);
-
-		sb.append(LINE_FEED).append("END:VTODO");
-		return sb.toString();
-	}
-
-	@Override
-	public String toString() {
-		return generateString();
-	}
-
-	public static SubSchema parse(Map<String, String> parameters, String code) {
-		// TODO Auto-generated method stub
-		return null;
-	}
 }
